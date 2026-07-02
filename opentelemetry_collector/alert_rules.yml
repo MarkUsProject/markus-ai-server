@@ -1,0 +1,45 @@
+groups:
+  # Alert rules over the app's HTTP metrics. The app does not emit OTLP metrics
+  # yet (it sends audit logs only), so these rules sit in "no data" and cannot
+  # fire until HTTP metric instrumentation is added. The intrusion-detection
+  # alerts live in Grafana, not here.
+  - name: ai_server_alerts
+    interval: 30s
+    rules:
+      # Alert when service appears down (no requests)
+      - alert: ServiceDown
+        expr: rate(ai_server_http_server_duration_milliseconds_count[2m]) == 0
+        for: 3m
+        labels:
+          severity: critical
+        annotations:
+          summary: "AI Server appears to be down"
+          description: "No HTTP requests received in the last 3 minutes."
+
+      # Alert on high error rate (>10% of requests failing)
+      - alert: HighErrorRate
+        expr: |
+          (
+            sum(rate(ai_server_http_server_duration_milliseconds_count{http_status_code=~"5.."}[5m]))
+            /
+            sum(rate(ai_server_http_server_duration_milliseconds_count[5m]))
+          ) > 0.10
+        for: 3m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High error rate detected"
+          description: "More than 10% of requests are failing with 5xx errors."
+
+      # Alert on very slow response times (p95 > 5 seconds)
+      - alert: HighLatency
+        expr: |
+          histogram_quantile(0.95,
+            sum(rate(ai_server_http_server_duration_milliseconds_bucket[5m])) by (le)
+          ) > 5000
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High latency detected"
+          description: "95th percentile response time is above 5 seconds."

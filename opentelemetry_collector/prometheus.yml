@@ -1,0 +1,30 @@
+# Prometheus configuration for scraping OpenTelemetry Collector metrics
+global:
+  scrape_interval: 15s      # How often to scrape metrics
+  evaluation_interval: 15s  # How often to evaluate rules
+
+# Alerting configuration
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ['alertmanager:9093']  # Alertmanager service
+
+# Load alert rules
+rule_files:
+  - '/etc/prometheus/alert_rules.yml'
+
+# Scrape configuration
+scrape_configs:
+  # Scrape metrics from OpenTelemetry Collector (collector's own health metrics)
+  - job_name: 'otel-collector'
+    static_configs:
+      - targets: ['otel-collector:8888']  # Collector's internal metrics endpoint
+        labels:
+          service: 'otel-collector'
+
+  # Scrape metrics that the collector exports (spanmetrics + Flask HTTP metrics)
+  - job_name: 'ai-server'
+    static_configs:
+      - targets: ['otel-collector:8889']  # Collector's Prometheus exporter
+        labels:
+          service: 'ai-server'

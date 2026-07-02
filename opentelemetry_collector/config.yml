@@ -1,0 +1,86 @@
+# OpenTelemetry Collector Configuration for ai-server monitoring
+receivers:
+  # Receives telemetry from the Flask app via OTLP. Today the app sends audit
+  # logs only; the traces and metrics pipelines below are ready for when the app
+  # adds tracing or metric instrumentation.
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317  # the app's OTLP exporter targets this (gRPC)
+      http:
+        endpoint: 0.0.0.0:4318  # alternative HTTP endpoint (not currently used)
+
+connectors:
+  # spanmetrics connector - Generates RED metrics (calls, errors, duration) from traces
+  # This is what Jaeger SPM requires to function
+  spanmetrics:
+    histogram:
+      explicit:
+        # Latency buckets in seconds (0.001s = 1ms, 10s = 10000ms)
+        buckets: [0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10]
+    dimensions:
+      # Group metrics by these span attributes
+      - name: http.method         # GET, POST, etc.
+      - name: http.status_code    # 200, 500, etc.
+    metrics_flush_interval: 15s   # Export metrics every 15 seconds
+
+processors:
+  # Batches telemetry (traces, metrics, and the audit logs) for efficient export
+  batch:
+    timeout: 10s              # Send a batch at least every 10 seconds
+    send_batch_size: 100      # OR as soon as 100 items accumulate
+
+exporters:
+  # Console output - shows exported telemetry in the collector's logs (all pipelines)
+  debug:
+    verbosity: normal
+
+  # OTLP exporter - sends traces to Jaeger via OTLP protocol
+  # Jaeger container exposes OTLP receiver on port 4317
+  otlp:
+    endpoint: jaeger:4317      # Jaeger's OTLP receiver (Docker network)
+    tls:
+      insecure: true           # No TLS encryption (ok for local development)
+
+  # Prometheus exporter - exposes metrics in Prometheus format
+  # Prometheus will scrape this endpoint every 15 seconds
+  prometheus:
+    endpoint: "0.0.0.0:8889"   # Expose metrics for Prometheus to scrape
+    namespace: "ai_server"      # Prefix for all metrics (ai_server_http_requests_total)
+    const_labels:               # Labels added to all metrics
+      environment: "development"
+
+  # OTLP/HTTP exporter - sends audit logs to Loki's native OTLP endpoint.
+  # The dedicated `loki` exporter was removed from collector-contrib (2024);
+  # Loki 3.0+ ingests OTLP directly. otlphttp appends /v1/logs to this base.
+  otlphttp/loki:
+    endpoint: http://loki:3100/otlp
+    tls:
+      insecure: true
+
+service:
+  pipelines:
+    # Traces pipeline - receives traces from Flask, sends to Jaeger AND spanmetrics
+    traces:
+      receivers: [otlp]                    # traces, once the app emits them
+      processors: [batch]                  # Batch the spans
+      exporters: [debug, otlp, spanmetrics]  # Send to console, Jaeger, AND spanmetrics connector
+
+    # Spanmetrics-generated metrics pipeline - RED metrics for Jaeger SPM
+    metrics/spanmetrics:
+      receivers: [spanmetrics]             # Receive metrics generated from traces by spanmetrics connector
+      processors: [batch]
+      exporters: [prometheus]              # Export to Prometheus (Jaeger reads from here)
+
+    # Application-generated metrics pipeline - ready for app metric instrumentation
+    metrics:
+      receivers: [otlp]                    # app metrics, once the app emits them
+      processors: [batch]
+      exporters: [debug, prometheus]       # Send to console AND Prometheus
+
+    # Audit logs pipeline - ships structured auth events to Loki for
+    # intrusion detection, plus console for debugging.
+    logs:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [debug, otlphttp/loki]
