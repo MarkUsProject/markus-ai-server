@@ -1,3 +1,7 @@
+import os
+
 from .server import app
 
-app.run(debug=True, host="0.0.0.0")
+# Debug mode exposes the Werkzeug remote-code-execution debugger; opt in
+# explicitly for local development only.
+app.run(debug=os.getenv('FLASK_DEBUG') == '1', host="0.0.0.0")

@@ -1,0 +1,14 @@
+# Email contact point for ai-server intrusion alerts.
+# In test, Grafana's SMTP points at Mailpit; in production the sysadmins
+# override GF_SMTP_* and this address with the real security alias.
+apiVersion: 1
+
+contactPoints:
+  - orgId: 1
+    name: ai-server-email
+    receivers:
+      - uid: ai-server-email
+        type: email
+        settings:
+          addresses: ai-server-security@markus.local
+          singleEmail: true

@@ -13,8 +13,10 @@ import ollama
 import requests
 from dotenv import load_dotenv
 from flask import Flask, abort, jsonify, request
+from werkzeug.exceptions import HTTPException
 
 from .redis_helper import REDIS_CONNECTION
+from .telemetry import configure_audit_logging, log_auth_failure
 
 # Configure logger
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(name)s - %(message)s')
@@ -24,6 +26,10 @@ logger = logging.getLogger('ai-server')
 load_dotenv()
 
 app = Flask('AI server')
+
+# Audit logging / intrusion detection. TRUSTED_PROXY_HOPS must be 0 when the
+# app is reached directly, or X-Forwarded-For becomes a spoofing hole.
+configure_audit_logging(app)
 
 # Configuration from environment variables
 DEFAULT_MODEL = os.getenv('DEFAULT_MODEL', 'deepseek-coder-v2:latest')
@@ -89,15 +95,13 @@ def chat_with_llama_server_http(
         )
 
         done_log_data = {'model': model, 'response_status_code': response.status_code}
-        logger.info(f'chat_with_llama_server_http done: {start_log_data}')
-        if response.status_code == 200:
-            data = response.json()
-            if 'choices' in data and len(data['choices']) > 0:
-                return data['choices'][0]['message']['content']
-            else:
-                raise Exception("Invalid response format from llama-server")
-        else:
-            raise Exception(f"Llama-server HTTP error")
+        logger.info(f'chat_with_llama_server_http done: {done_log_data}')
+        if response.status_code != 200:
+            raise Exception(f"Llama-server HTTP error {response.status_code}")
+        data = response.json()
+        if 'choices' not in data or not data['choices']:
+            raise Exception("Invalid response format from llama-server")
+        return data['choices'][0]['message']['content']
 
     except requests.Timeout:
         raise Exception(f"Llama-server request timed out for model {model}")
@@ -248,18 +252,18 @@ def chat_with_model(
         )
 
 
-def authenticate() -> str:
+def authenticate() -> bytes:
     """Authenticate the given request using an API key."""
     api_key = request.headers.get('X-API-KEY')
     client_ip = request.remote_addr
     endpoint = request.path
     if not api_key:
-        logger.warning(f"Missing API key from {client_ip} at {endpoint}")
+        log_auth_failure('missing_key', client_ip, endpoint)
         abort(401, description="Missing API key")
 
     user = REDIS_CONNECTION.get(f"api-key:{api_key}")
     if not user:
-        logger.warning(f"Invalid API key attempt from {client_ip} at {endpoint}")
+        log_auth_failure('invalid_key', client_ip, endpoint)
         abort(401, description="Invalid API key")
 
     return user
@@ -272,9 +276,13 @@ def chat():
     model = request.form.get('model', DEFAULT_MODEL)
     content = request.form.get('content', '')
     llama_mode = request.form.get('llama_mode', 'cli')
-    system_prompt = request.form.get('system_prompt')
+    # Accept either field name: callers send 'system_prompt', the ai_feedback
+    # RemoteModel sends 'system_instructions'. Prefer the former when both exist.
+    system_prompt = request.form.get('system_prompt') or request.form.get('system_instructions')
     image_files = list(request.files.values())
     model_options = request.form.get('model_options')
+    if model_options:
+        model_options = json.loads(model_options)
     json_schema = request.form.get('json_schema')
     if json_schema:
         json_schema = json.loads(json_schema)
@@ -289,5 +297,9 @@ def chat():
 
 
 @app.errorhandler(Exception)
-def internal_error(error):
+def handle_exception(error):
+    # Preserve aborts (e.g. 401 from authenticate, 400 for missing content)
+    # instead of collapsing every error into a 500.
+    if isinstance(error, HTTPException):
+        return jsonify({"error": error.description}), error.code
     return jsonify({"error": str(error)}), 500

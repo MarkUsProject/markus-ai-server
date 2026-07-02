@@ -1,0 +1,235 @@
+services:
+  # ==================== Core Application Services ====================
+
+  # Redis - Cache and message broker for AI server
+  redis:
+    image: redis:7-alpine
+    container_name: ai-server-redis
+    ports:
+      - "6380:6379"   # host 6380 to avoid clashing with the autotesting redis
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - monitoring
+    restart: unless-stopped
+
+
+  # AI Server - Flask application
+  ai-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ai-server-app
+    ports:
+      - "5001:5000"   # host 5001 to avoid clashing with the autotest client
+    environment:
+      # Flush stdout/stderr immediately so audit log lines reach `docker logs`
+      # without block-buffering delay (the default for a non-TTY container).
+      - PYTHONUNBUFFERED=1
+      - REDIS_URL=redis://redis:6379
+      - LLAMA_SERVER_URL=http://host.docker.internal:11434
+      - OLLAMA_HOST=http://host.docker.internal:11434
+      - DEFAULT_MODEL=deepseek-coder-v2:latest
+      # OpenTelemetry configuration (only used if monitoring profile is active)
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+      # Mirrors the production reverse proxy: trust 1 X-Forwarded-For hop so the
+      # real client IP is recorded (and so the E2E test can inject attacker IPs).
+      - TRUSTED_PROXY_HOPS=1
+    depends_on:
+      redis:
+        condition: service_healthy
+    volumes:
+      - .:/app
+    networks:
+      - monitoring
+    restart: unless-stopped
+
+  # ==================== OpenTelemetry & Monitoring Services ====================
+  # These services only start when using: docker compose --profile monitoring up
+
+  otel-collector:
+    image: ghcr.io/open-telemetry/opentelemetry-collector-releases/opentelemetry-collector-contrib:0.139.0
+    container_name: otel-collector
+    profiles: ["monitoring"]
+    deploy:
+      resources:
+        limits:
+          memory: 200M
+    command: ["--config=/etc/otelcol-config.yml"]
+    volumes:
+      - ./opentelemetry_collector/config.yml:/etc/otelcol-config.yml:ro
+    ports:
+      - "4317:4317"
+      - "4318:4318"
+      - "8889:8889"
+      - "8888:8888"
+    networks:
+      - monitoring
+    depends_on:
+      - jaeger
+      - prometheus
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    profiles: ["monitoring"]
+    ports:
+      - "9090:9090"
+      - "18889:8889"
+    volumes:
+      - ./opentelemetry_collector/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./opentelemetry_collector/alert_rules.yml:/etc/prometheus/alert_rules.yml:ro
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+    networks:
+      - monitoring
+    depends_on:
+      - alertmanager
+    restart: unless-stopped
+
+  alertmanager:
+    image: prom/alertmanager:latest
+    container_name: alertmanager
+    profiles: ["monitoring"]
+    ports:
+      - "9093:9093"
+    volumes:
+      - ./opentelemetry_collector/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+    command:
+      - '--config.file=/etc/alertmanager/alertmanager.yml'
+      - '--storage.path=/alertmanager'
+    networks:
+      - monitoring
+    restart: unless-stopped
+
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    container_name: jaeger
+    profiles: ["monitoring"]
+    ports:
+      - "16686:16686"
+      - "14317:4317"
+      - "14318:4318"
+    environment:
+      - METRICS_STORAGE_TYPE=prometheus
+      - PROMETHEUS_SERVER_URL=http://prometheus:9090
+      - PROMETHEUS_QUERY_NAMESPACE=ai_server_traces_span_metrics
+      - PROMETHEUS_QUERY_DURATION_UNIT=ms
+      - PROMETHEUS_QUERY_NORMALIZE_CALLS=true
+      - PROMETHEUS_QUERY_NORMALIZE_DURATION=true
+      - JAEGER_DISABLED=false
+      - PROMETHEUS_QUERY_SUPPORT_SPANMETRICS_CONNECTOR=true
+      - COLLECTOR_OTLP_ENABLED=true
+    networks:
+      - monitoring
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+
+  # Loki - log store for audit events (intrusion detection)
+  loki:
+    image: grafana/loki:3.3.2
+    container_name: loki
+    profiles: ["monitoring"]
+    command: ["-config.file=/etc/loki/loki.yml"]
+    volumes:
+      - ./opentelemetry_collector/loki.yml:/etc/loki/loki.yml:ro
+      - loki_data:/loki
+    ports:
+      - "3100:3100"
+    networks:
+      - monitoring
+    restart: unless-stopped
+
+  # Grafana - single pane over Jaeger (traces), Prometheus (metrics), Loki (logs).
+  # Host port 3001 to avoid clashing with the MarkUs rails app on 3000.
+  grafana:
+    image: grafana/grafana:11.4.0
+    container_name: grafana
+    profiles: ["monitoring"]
+    ports:
+      - "3001:3000"
+    environment:
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
+      # SMTP points at Mailpit for testing; override for the production relay.
+      - GF_SMTP_ENABLED=true
+      - GF_SMTP_HOST=mailpit:1025
+      - GF_SMTP_FROM_ADDRESS=ai-server-alerts@markus.local
+      - GF_SMTP_FROM_NAME=MarkUs AI Server Alerts
+      - GF_SMTP_SKIP_VERIFY=true
+    volumes:
+      - ./opentelemetry_collector/grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      - loki
+      - prometheus
+    networks:
+      - monitoring
+    restart: unless-stopped
+
+  # Mailpit - captures alert emails during testing (SMTP sink + web UI/API)
+  mailpit:
+    image: axllent/mailpit:latest
+    container_name: mailpit
+    profiles: ["monitoring"]
+    ports:
+      - "8025:8025"   # web UI + REST API (assert emails here)
+      - "1025:1025"   # SMTP
+    networks:
+      - monitoring
+    restart: unless-stopped
+
+networks:
+  monitoring:
+    driver: bridge
+
+volumes:
+  redis_data:
+  loki_data:
+  grafana_data:
+
+# ==================== USAGE INSTRUCTIONS ====================
+#
+# Start core services only (Redis, AI Server):
+#   docker compose up -d
+#
+# Start everything including OpenTelemetry monitoring:
+#   docker compose --profile monitoring up -d
+#
+# Stop all services:
+#   docker compose down
+#   # or with profile:
+#   docker compose --profile monitoring down
+#
+# View logs:
+#   docker compose logs -f ai-server
+#
+# Restart a service:
+#   docker compose restart ai-server
+#
+# Check status:
+#   docker compose ps
+#
+# ==================== ACCESS URLS ====================
+#
+# Core Services:
+#   - AI Server: http://localhost:5001
+#   - Redis: localhost:6380
+#   - Ollama (on the host): http://localhost:11434
+#
+# Monitoring (only when --profile monitoring is used):
+#   - Jaeger UI: http://localhost:16686
+#   - Prometheus: http://localhost:9090
+#   - Alertmanager: http://localhost:9093
+#   - OTel Collector: http://localhost:8888/metrics

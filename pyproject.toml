@@ -21,6 +21,8 @@ license-files = ["LICEN[CS]E*"]
 dependencies = [
     "flask",
     "ollama",
+    "opentelemetry-sdk",
+    "opentelemetry-exporter-otlp-proto-grpc",
     "python-dotenv",
     "redis",
     "requests",
@@ -31,6 +33,7 @@ dependencies = [
 dev = [
     "pre-commit",
     "pytest",
+    "pytest-cov",
 ]
 
 [project.urls]
