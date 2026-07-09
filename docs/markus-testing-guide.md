@@ -35,6 +35,25 @@ And here is who watches for break-ins:
 AI server → log book (Loki) → alarms (Grafana) → email (Mailpit)
 ```
 
+### Where each program's web page is
+
+Most of the programs have a page you can open in your browser
+(after Part 1 starts them):
+
+| Program | Address | What you see there |
+|---|---|---|
+| MarkUs | http://host.docker.internal:3000/csc108 | The grading website |
+| Grafana | http://localhost:3001 | The main watcher window: the log book and the alarms |
+| Mailpit | http://localhost:8025 | The alarm emails |
+| RQ dashboard | http://localhost:9181 | The Autotester's job queue (stuck or failed test jobs) |
+| Jaeger | http://localhost:16686 | Traces (not used in this guide) |
+| Prometheus | http://localhost:9090 | Counters (not used in this guide) |
+
+> **Loki has no page of its own.** Loki only *stores* the log book. To read it,
+> open Grafana → menu (three lines) → **Explore** → pick **Loki** at the top.
+> Step 6.3 walks you through it. (Programs can query Loki directly at
+> http://localhost:3100, but there is nothing there for a browser.)
+
 ---
 
 ## What changed (what we are testing)
@@ -86,7 +105,8 @@ docker exec ai-server-redis redis-cli set "api-key:secret123" alice
 ```
 
 **PASS:** you see `OK`.
-The Autotester is already set up to use this same key (`secret123`).
+This tells the AI server which key to **accept**. The Autotester must **send**
+that same key. Step 1.5 checks that it does.
 
 **1.4 — Make the shared network.**
 
@@ -108,6 +128,29 @@ If you see an error about a missing network, run:
 ```bash
 cd ~/work/autotesting && docker compose down && docker compose up -d
 ```
+
+Then check that the Autotester holds the key it will send:
+
+```bash
+docker exec autotesting-server-1 printenv REMOTE_API_KEY
+```
+
+**PASS:** it prints `secret123`.
+
+> **If it prints nothing,** the Autotester will knock with no key at all, and
+> every AI test will fail with **401 Missing API key**. Set the key one of
+> two ways:
+>
+> 1. **On the Autotester itself** (how this setup does it): the file
+>    `~/work/autotesting/docker-compose.override.yml` gives the `server`
+>    service the line `REMOTE_API_KEY=secret123`. Add it if it is missing,
+>    then restart: `cd ~/work/autotesting && docker compose up -d`.
+> 2. **As an uploaded test file:** make a file named `.env` holding the one
+>    line `REMOTE_API_KEY=secret123`, and upload it with the assignment's
+>    test files (the same upload button used for `sys_taok.txt` in step 4.3).
+>    The AI test reads it on every run — no restart needed.
+>
+> If both are set, the Autotester's own setting (way 1) wins.
 
 **1.6 — Start MarkUs.**
 
@@ -326,6 +369,8 @@ If all five boxes are checked, everything we built works.
 | Autotester tests never start, or setup errors | The Autotester may be missing its parts (fresh checkout). In `~/work/autotesting` run `docker compose run --rm server-deps-updater` and then `docker compose run --rm client-deps-updater`, then restart it. |
 | Error says `LimitExceededException` | The Autotester allows 20 calls per minute. Wait one minute and try again, or raise the limit: `docker exec autotesting-redis-1 redis-cli set "autotest:ratelimit:<api-key>:limit" 200` (the api key is on the course's autotest setting). |
 | Error says connection refused to `localhost:3000` | MarkUs told the Autotester to call back at an address only your browser knows. Use a MarkUs build that sets `MARKUS_URL` to an address the Autotester can reach, or do every save and test run from a `host.docker.internal` browser tab. |
+| Test result says 401 **Missing API key** | The Autotester has no key to send. Redo the `REMOTE_API_KEY` check at the end of step 1.5. |
+| Test result says 401 **Invalid API key** | The AI server does not accept the key the Autotester sent. Redo step 1.3. Also check the result's date: the page shows the **last finished run**, which may be old. Click **Run Tests** for a fresh one. |
 | Test result says "System Prompt file ... not found" | The system_prompt box holds plain words. It must be a **file name**. Redo steps 4.1–4.4. |
 | Test result says model not found | The Model Name box is empty or misspelled. Set it to `qwen3:1.7b` and save again. |
 | Test result says timeout | The AI was too slow. Raise Timeout to `600` and run again. |
