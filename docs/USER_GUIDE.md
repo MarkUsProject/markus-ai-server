@@ -143,6 +143,11 @@ API keys live in Redis, one per user. The value is the username.
 redis-cli set "api-key:secret123" alice
 ```
 
+Callers present the key in the `X-API-KEY` header. The MarkUs Autotester's AI
+tester reads its copy from the `REMOTE_API_KEY` environment variable (set on
+the Autotester, or in a `.env` file uploaded with the assignment's test files).
+If it is unset, every request fails with 401 `Missing API key`.
+
 ### 3.3 Start the full stack in Docker
 
 The monitoring services start only with the `monitoring` profile.
@@ -159,8 +164,8 @@ the app. Audit events flow. A test can set a client IP with `X-Forwarded-For`.
 | Service | URL or port | Use it for |
 |---|---|---|
 | ai-server | http://localhost:5001 | the app (`POST /chat`) |
-| Loki | http://localhost:3100 | query the audit logs |
-| Grafana | http://localhost:3001 | see rules and data sources (anonymous admin) |
+| Loki | http://localhost:3100 | audit log store. API only, no UI — browse the logs in Grafana → Explore → Loki |
+| Grafana | http://localhost:3001 | browse audit logs (Explore), alert rules, contact points (anonymous admin) |
 | Mailpit | http://localhost:8025 | read the alert emails |
 | Jaeger | http://localhost:16686 | traces |
 | Prometheus | http://localhost:9090 | metrics |
