@@ -2,20 +2,22 @@
 
 ## Developers
 
-To install project dependencies, including development dependencies:
+Install the project with its development dependencies:
 
 ```console
-$ pip install -e .[dev]
+$ uv sync
 ```
 
-To install pre-commit hooks:
+(or `pip install -e . --group dev` with pip 25.1+; `dev` is a dependency group, not an extra)
+
+Install the pre-commit hooks:
 
 ```console
 $ pre-commit install
 ```
 
-To run the test suite:
+Run the tests:
 
 ```console
-$ pytest
+$ uv run pytest
 ```
