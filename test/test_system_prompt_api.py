@@ -72,6 +72,31 @@ class TestSystemPromptAPI:
             data={'model': TEST_MODEL, 'content': TEST_USER_CONTENT, 'system_prompt': TEST_SYSTEM_PROMPT},
         )
 
-        assert response.status_code == 500
+        assert response.status_code == 401
         response_data = response.get_json()
-        assert "401 Unauthorized" in response_data['error']
+        assert "Invalid API key" in response_data['error']
+
+    @patch('markus_ai_server.server.REDIS_CONNECTION')
+    def test_api_missing_key_returns_401(self, mock_redis, client):
+        """A request with no API key is rejected as 401, not collapsed into a 500."""
+        response = client.post(
+            '/chat',
+            data={'model': TEST_MODEL, 'content': TEST_USER_CONTENT},
+        )
+
+        assert response.status_code == 401
+        assert "Missing API key" in response.get_json()['error']
+
+    @patch('markus_ai_server.server.REDIS_CONNECTION')
+    def test_api_missing_content_returns_400(self, mock_redis, client):
+        """Aborts other than 401 keep their status code too."""
+        mock_redis.get.return_value = b'test_user'
+
+        response = client.post(
+            '/chat',
+            headers={'X-API-KEY': 'test-key'},
+            data={'model': TEST_MODEL, 'content': '   '},
+        )
+
+        assert response.status_code == 400
+        assert "Missing prompt content" in response.get_json()['error']
