@@ -272,7 +272,9 @@ def chat():
     model = request.form.get('model', DEFAULT_MODEL)
     content = request.form.get('content', '')
     llama_mode = request.form.get('llama_mode', 'cli')
-    system_prompt = request.form.get('system_prompt')
+    # Accept either field name: callers send 'system_prompt', the ai_feedback
+    # RemoteModel sends 'system_instructions'. Prefer the former when both exist.
+    system_prompt = request.form.get('system_prompt') or request.form.get('system_instructions')
     image_files = list(request.files.values())
     model_options = request.form.get('model_options')
     json_schema = request.form.get('json_schema')
