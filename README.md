@@ -31,5 +31,5 @@ $ pre-commit install
 Run the tests:
 
 ```console
-$ pytest
+$ uv run pytest
 ```
