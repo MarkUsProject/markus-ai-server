@@ -1,0 +1,46 @@
+# Alertmanager configuration for ai-server alerts
+# Docs: https://prometheus.io/docs/alerting/latest/configuration/
+
+global:
+  # Default email settings (configure these with your SMTP server)
+  # OPTION 1: Gmail (requires app password)
+  # smtp_smarthost: 'smtp.gmail.com:587'
+  # smtp_from: 'your-email@gmail.com'
+  # smtp_auth_username: 'your-email@gmail.com'
+  # smtp_auth_password: 'your-app-password'
+
+  # OPTION 2: Use a local mail relay
+  # smtp_smarthost: 'localhost:25'
+  # smtp_from: 'alertmanager@localhost'
+  # smtp_require_tls: false
+
+route:
+  # Default route - groups alerts by alert name
+  group_by: ['alertname']
+  group_wait: 30s        # Wait 30s before sending first alert in a group
+  group_interval: 5m     # Wait 5m before sending updates for existing group
+  repeat_interval: 4h    # Resend alert every 4h if still firing
+  receiver: 'default'    # Default receiver (see below)
+
+receivers:
+  # Default receiver - no notifier configured, so alerts appear only in the
+  # Alertmanager UI (localhost:9093) and are not sent anywhere.
+  - name: 'default'
+    # Uncomment and configure email settings:
+    # email_configs:
+    #   - to: 'your-email@example.com'
+    #     headers:
+    #       Subject: '[ALERT] {{ .GroupLabels.alertname }}'
+
+  # Example: Critical alerts go to a different email/channel
+  # - name: 'critical'
+  #   email_configs:
+  #     - to: 'oncall@example.com'
+
+# Optional: Inhibition rules (suppress certain alerts when others fire)
+# inhibit_rules:
+#   - source_match:
+#       severity: 'critical'
+#     target_match:
+#       severity: 'warning'
+#     equal: ['alertname', 'service']

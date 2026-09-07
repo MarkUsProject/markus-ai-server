@@ -1,0 +1,11 @@
+# Route all ai-server intrusion alerts to the email contact point.
+# Grouped by IP so a per-IP brute force and a global spray notify separately.
+apiVersion: 1
+
+policies:
+  - orgId: 1
+    receiver: ai-server-email
+    group_by: ['alertname', 'client_ip']
+    group_wait: 10s
+    group_interval: 1m
+    repeat_interval: 1h
