@@ -13,6 +13,7 @@ import ollama
 import requests
 from dotenv import load_dotenv
 from flask import Flask, abort, jsonify, request
+from werkzeug.exceptions import HTTPException
 
 from .redis_helper import REDIS_CONNECTION
 
@@ -248,7 +249,7 @@ def chat_with_model(
         )
 
 
-def authenticate() -> str:
+def authenticate() -> bytes:
     """Authenticate the given request using an API key."""
     api_key = request.headers.get('X-API-KEY')
     client_ip = request.remote_addr
@@ -291,5 +292,9 @@ def chat():
 
 
 @app.errorhandler(Exception)
-def internal_error(error):
+def handle_exception(error):
+    # Preserve aborts (e.g. 401 from authenticate, 400 for missing content)
+    # instead of collapsing every error into a 500.
+    if isinstance(error, HTTPException):
+        return jsonify({"error": error.description}), error.code
     return jsonify({"error": str(error)}), 500
