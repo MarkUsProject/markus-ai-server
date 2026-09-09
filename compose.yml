@@ -1,0 +1,50 @@
+services:
+
+  # AI Server - Flask application. Based on
+  # https://github.com/astral-sh/uv-docker-example/blob/main/compose.yml
+  ai-server:
+    build: .
+    container_name: ai-server-app
+    # Configurable via .env. Default 5001 avoid clashing with the MarkUs autotest client.
+    ports:
+      - "${AI_SERVER_PORT:-5001}:${AI_SERVER_PORT:-5001}"
+    environment:
+      - UV_NO_DEV=0  # Include development dependencies when working locally
+      - PORT=${AI_SERVER_PORT:-5001}
+      - REDIS_URL=redis://redis:${REDIS_PORT:-6380}
+      - LLAMA_SERVER_URL=http://host.docker.internal:11434
+      - OLLAMA_HOST=http://127.0.0.1:11434
+      - DEFAULT_MODEL=smollm2:135m-instruct-q2_K
+
+    # Run as root during development so the environment is mutable.
+    user: root
+
+    depends_on:
+      redis:
+        condition: service_healthy
+    volumes:
+      - /app/.venv
+      - .:/app
+      - ollama_data:/root/.ollama
+    restart: unless-stopped
+
+  # Redis - Cache and message broker for AI server
+  redis:
+    image: redis:7-alpine
+    container_name: ai-server-redis
+    # Default 6380 avoids clashing with the autotesting redis
+    ports:
+      - "${REDIS_PORT:-6380}:${REDIS_PORT:-6380}"
+    volumes:
+      - redis_data:/data
+    command: redis-server --port ${REDIS_PORT:-6380} --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "-p", "${REDIS_PORT:-6380}", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  redis_data:
+  ollama_data:
