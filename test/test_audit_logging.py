@@ -108,14 +108,14 @@ class TestSetupAuditLogging:
         assert telemetry.logger.handlers == before  # nothing attached
 
     def test_attaches_handler_when_endpoint_set(self, monkeypatch):
-        monkeypatch.setenv('OTEL_EXPORTER_OTLP_ENDPOINT', 'http://localhost:4317')
+        monkeypatch.setenv('OTEL_EXPORTER_OTLP_ENDPOINT', 'http://localhost:3100/otlp')
         before = len(telemetry.logger.handlers)
         with (
             patch('opentelemetry._logs.set_logger_provider') as set_lp,
             patch('opentelemetry.sdk._logs.LoggerProvider'),
             patch('opentelemetry.sdk._logs.LoggingHandler'),
             patch('opentelemetry.sdk._logs.export.BatchLogRecordProcessor'),
-            patch('opentelemetry.exporter.otlp.proto.grpc._log_exporter.OTLPLogExporter'),
+            patch('opentelemetry.exporter.otlp.proto.http._log_exporter.OTLPLogExporter'),
         ):
             telemetry.setup_audit_logging('ai-server')
         try:
@@ -126,7 +126,7 @@ class TestSetupAuditLogging:
                 telemetry.logger.removeHandler(telemetry.logger.handlers[-1])
 
     def test_swallows_setup_errors(self, monkeypatch, caplog):
-        monkeypatch.setenv('OTEL_EXPORTER_OTLP_ENDPOINT', 'http://localhost:4317')
+        monkeypatch.setenv('OTEL_EXPORTER_OTLP_ENDPOINT', 'http://localhost:3100/otlp')
         with patch('opentelemetry.sdk.resources.Resource.create', side_effect=RuntimeError('boom')):
             with caplog.at_level(logging.WARNING, logger='ai-server'):
                 telemetry.setup_audit_logging('ai-server')  # must not raise

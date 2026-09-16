@@ -1,9 +1,9 @@
 """Audit logging and proxy handling for intrusion detection.
 
 Emits structured authentication audit events through the OpenTelemetry logs SDK
-over OTLP, so they can be stored in Loki and monitored for brute-force / spray
-attacks. Setup is best-effort: a missing collector or a missing/experimental SDK
-never blocks a request.
+over OTLP/HTTP, straight to Loki's native OTLP endpoint, so they can be monitored
+for brute-force / spray attacks. Setup is best-effort: a missing log store or a
+missing/experimental SDK never blocks a request.
 """
 
 from __future__ import annotations
@@ -31,18 +31,19 @@ def apply_proxy_fix(app, trusted_proxy_hops: int) -> None:
 
 
 def setup_audit_logging(service_name: str) -> None:
-    """Route ``ai-server`` logs through OTLP to the collector (best-effort).
+    """Route ``ai-server`` logs through OTLP/HTTP to the log store (best-effort).
 
     Uses the OpenTelemetry logs SDK, which is still experimental. Any failure is
     swallowed so the application keeps serving even when telemetry is
     unavailable. Activates only when ``OTEL_EXPORTER_OTLP_ENDPOINT`` is set, so
-    local/test/CLI runs neither attempt nor retry exports.
+    local/test/CLI runs neither attempt nor retry exports. The exporter appends
+    ``/v1/logs`` to that endpoint, so ``http://loki:3100/otlp`` is the value to set.
     """
     if not os.getenv('OTEL_EXPORTER_OTLP_ENDPOINT'):
         return
     try:
         from opentelemetry._logs import set_logger_provider
-        from opentelemetry.exporter.otlp.proto.grpc._log_exporter import OTLPLogExporter
+        from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
         from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
         from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
         from opentelemetry.sdk.resources import Resource
@@ -50,7 +51,7 @@ def setup_audit_logging(service_name: str) -> None:
         provider = LoggerProvider(resource=Resource.create({'service.name': service_name}))
         set_logger_provider(provider)
         # BatchLogRecordProcessor exports on a background thread, so a down
-        # collector never blocks the request path.
+        # log store never blocks the request path.
         provider.add_log_record_processor(BatchLogRecordProcessor(OTLPLogExporter()))
         logger.addHandler(LoggingHandler(logger_provider=provider))
     except Exception as exc:  # noqa: BLE001 - telemetry must never break the app
