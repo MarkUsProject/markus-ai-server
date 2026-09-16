@@ -52,9 +52,9 @@ model running.
 ```
 MarkUs --> markus-ai-server (Flask) --> Ollama / llama.cpp --> answer
                   |
-                  | on a refused key: one audit event (OTLP log)
+                  | on a refused key: one audit event (OTLP log over HTTP)
                   v
-          OTel Collector --> Loki --> Grafana rules --> email
+                Loki --> Grafana rules --> email
 ```
 
 ### Where the parts live
@@ -63,10 +63,9 @@ MarkUs --> markus-ai-server (Flask) --> Ollama / llama.cpp --> answer
 |---|---|
 | `src/markus_ai_server/server.py` | The Flask app. `authenticate()` records each refusal |
 | `src/markus_ai_server/telemetry.py` | Audit logging and proxy handling |
-| `opentelemetry_collector/config.yml` | Collector: OTLP in, then out to Jaeger, Prometheus, Loki |
-| `opentelemetry_collector/loki.yml` | Loki log store, 90-day retention |
-| `opentelemetry_collector/grafana/provisioning/` | Data sources, alert rules, email contact point |
-| `docker-compose.yml` | The whole stack. Monitoring sits behind a profile |
+| `monitoring/loki.yml` | Loki log store, native OTLP ingest, 90-day retention |
+| `monitoring/grafana/provisioning/` | Data source, alert rules, email contact point |
+| `compose.yml` | The whole stack. Monitoring sits behind a profile |
 | `test/test_audit_logging.py` | Unit tests for the app |
 | `test/e2e/suite.sh` | End-to-end test, the acceptance gate |
 
@@ -74,7 +73,7 @@ MarkUs --> markus-ai-server (Flask) --> Ollama / llama.cpp --> answer
 
 1. **Logging never breaks the app.** Audit logging turns on only when
    `OTEL_EXPORTER_OTLP_ENDPOINT` is set. Exports run on a background thread. Setup
-   errors are caught and logged. A down collector drops no request.
+   errors are caught and logged. A down log store drops no request.
 2. **The client IP can be trusted.** The server uses `X-Forwarded-For` only when
    `TRUSTED_PROXY_HOPS` is above 0. Reached directly (`TRUSTED_PROXY_HOPS=0`), it
    ignores that header. No caller can fake an address.
@@ -83,7 +82,7 @@ MarkUs --> markus-ai-server (Flask) --> Ollama / llama.cpp --> answer
 
 ### The two alarm rules
 
-Both live in `grafana/provisioning/alerting/rules.yml` and run every minute.
+Both live in `monitoring/grafana/provisioning/alerting/rules.yml` and run every minute.
 
 | Rule | Fires when | Severity |
 |---|---|---|
@@ -98,7 +97,7 @@ fires, Grafana sends an email (Mailpit catches it in the test stack).
 ## Part 3: Set it up, configure it, test it
 
 Run it two ways. Local mode runs the app and unit tests. Docker mode runs the full
-chain from audit event to email. The ports below match `docker-compose.yml`.
+chain from audit event to email. The ports below match `compose.yml`.
 
 ### 3.1 Local mode (app and unit tests)
 
@@ -115,7 +114,7 @@ pytest                                  # whole suite
 pytest test/test_audit_logging.py -q    # audit tests only
 ```
 
-> **Verified:** `pytest` passes (53 tests, 13 in the audit file). The audit tests
+> **Verified:** `pytest` passes (55 tests, 13 in the audit file). The audit tests
 > cover both `result` values with all four fields, no key or body in the record,
 > the 401 and 400 responses, the gated OTLP setup, and the proxy IP rules.
 
@@ -126,10 +125,10 @@ The server reads these at startup, from a `.env` file or the container environme
 | Variable | Default | What it controls |
 |---|---|---|
 | `REDIS_URL` | *(required)* | Redis that holds the API keys (`api-key:<key>` maps to a username) |
-| `DEFAULT_MODEL` | `deepseek-coder-v2:latest` | Model used when a request names none |
+| `DEFAULT_MODEL` | `smollm2:135m-instruct-q2_K` | Model used when a request names none. Baked into the image at build time |
 | `OLLAMA_HOST` | *(unset)* | Ollama backend URL |
 | `LLAMA_SERVER_URL` | *(unset)* | llama.cpp HTTP server URL |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | *(unset)* | Set this to turn audit logging on |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | *(unset)* | Set to `http://loki:3100/otlp` to turn audit logging on. The exporter appends `/v1/logs` |
 | `TRUSTED_PROXY_HOPS` | `0` | `0` reads the direct address. `1` trusts one proxy in front |
 | `FLASK_DEBUG` | *(unset)* | Set to `1` for the dev debugger and auto-reload. Never set it in production |
 
@@ -140,8 +139,11 @@ The server reads these at startup, from a `.env` file or the container environme
 API keys live in Redis, one per user. The value is the username.
 
 ```bash
-redis-cli set "api-key:secret123" alice
+redis-cli -p 6380 set "api-key:secret123" alice
 ```
+
+> The stack's Redis listens on `REDIS_PORT` (default 6380), not the client's
+> default 6379. Pass `-p` or the connection is refused.
 
 Callers present the key in the `X-API-KEY` header. The MarkUs Autotester's AI
 tester reads its copy from the `REMOTE_API_KEY` environment variable (set on
@@ -158,7 +160,10 @@ docker compose --profile monitoring up -d --build
 docker compose ps
 ```
 
-The compose file sets `OTEL_EXPORTER_OTLP_ENDPOINT` and `TRUSTED_PROXY_HOPS=1` on
+Set `OTEL_EXPORTER_OTLP_ENDPOINT=http://loki:3100/otlp` in `.env` first, or the app
+exports nothing. `.env.example` carries the line, commented out.
+
+The compose file passes `OTEL_EXPORTER_OTLP_ENDPOINT` through and sets `TRUSTED_PROXY_HOPS=1` on
 the app. Audit events flow. A test can set a client IP with `X-Forwarded-For`.
 
 | Service | URL or port | Use it for |
@@ -167,14 +172,11 @@ the app. Audit events flow. A test can set a client IP with `X-Forwarded-For`.
 | Loki | http://localhost:3100 | audit log store. API only, no UI — browse the logs in Grafana → Explore → Loki |
 | Grafana | http://localhost:3001 | browse audit logs (Explore), alert rules, contact points (anonymous admin) |
 | Mailpit | http://localhost:8025 | read the alert emails |
-| Jaeger | http://localhost:16686 | traces |
-| Prometheus | http://localhost:9090 | metrics |
-| Alertmanager | http://localhost:9093 | metric alerts |
 
 Add a working key to the stack's Redis:
 
 ```bash
-docker exec ai-server-redis redis-cli set "api-key:secret123" alice
+docker exec ai-server-redis redis-cli -p 6380 set "api-key:secret123" alice
 ```
 
 ### 3.4 Test the key check and the audit event (no model needed)
@@ -270,11 +272,11 @@ docker compose --profile monitoring down -v       # also drop Loki, Grafana, Red
 ## Production deployment
 
 The Docker stack is the test rig. In production, the sysadmins run central Loki
-and Grafana. The server's collector ships logs to that central endpoint. Nothing
-else in the image changes. The handoff steps:
+and Grafana. The app ships logs straight to that central endpoint over OTLP/HTTP.
+Nothing else in the image changes. The handoff steps:
 
 1. Provision central Loki (3.0+) with OTLP ingest and 90-day retention.
-2. Point the collector's `otlphttp/loki` exporter at it, over TLS.
+2. Set `OTEL_EXPORTER_OTLP_ENDPOINT` on the app to its `/otlp` base, over TLS.
 3. Add Loki as a data source in central Grafana.
 4. Import the two rules and the email contact point. Set the real email alias.
 5. Run the app under gunicorn, not the Flask dev server.
@@ -283,7 +285,7 @@ else in the image changes. The handoff steps:
 
 | Problem | Look here first |
 |---|---|
-| Events do not reach Loki | Is `OTEL_EXPORTER_OTLP_ENDPOINT` set on the app? Is the collector up? Export is batched, so wait a few seconds and query again |
+| Events do not reach Loki | Is `OTEL_EXPORTER_OTLP_ENDPOINT` set on the app? Is Loki up? Export is batched, so wait a few seconds and query again |
 | Every attacker shows one IP | `TRUSTED_PROXY_HOPS` is wrong. Behind a proxy it must equal the hop count. Direct it must be `0` |
 | No alert email arrives | Grafana SMTP (`GF_SMTP_*`) must point at a reachable relay. Check `docker logs grafana` |
 | `/chat` returns 500, not 401 | A non-auth error happened. Read the app log for the traceback |

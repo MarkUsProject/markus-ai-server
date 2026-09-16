@@ -3,6 +3,7 @@
 #
 # Assumes the stack is running:
 #   docker compose --profile monitoring up -d --build
+# with OTEL_EXPORTER_OTLP_ENDPOINT=http://loki:3100/otlp set in .env.
 #
 # Validates the whole chain across several scenarios and prints a pass/fail
 # tally. Exit code is non-zero if any scenario fails.
@@ -69,8 +70,8 @@ app_logged_auth_failure() {
 app_logged_auth_failure && ok "auth-failure event emitted by app" || bad "no auth-failure event in app logs"
 
 note "T3: events reach Loki as structured metadata (queryable by client_ip)"
-# OTLP export -> collector -> Loki is batched/async, so poll instead of a
-# single sleep (which races the first export flush after an app restart).
+# OTLP export -> Loki is batched/async, so poll instead of a single sleep
+# (which races the first export flush after an app restart).
 c=0
 for _ in $(seq 1 20); do
   c=$(auth_failures_from_ip 203.0.113.42)

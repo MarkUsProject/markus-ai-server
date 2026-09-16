@@ -46,8 +46,6 @@ Most of the programs have a page you can open in your browser
 | Grafana | http://localhost:3001 | The main watcher window: the log book and the alarms |
 | Mailpit | http://localhost:8025 | The alarm emails |
 | RQ dashboard | http://localhost:9181 | The Autotester's job queue (stuck or failed test jobs) |
-| Jaeger | http://localhost:16686 | Traces (not used in this guide) |
-| Prometheus | http://localhost:9090 | Counters (not used in this guide) |
 
 > **Loki has no page of its own.** Loki only *stores* the log book. To read it,
 > open Grafana → menu (three lines) → **Explore** → pick **Loki** at the top.
@@ -87,7 +85,9 @@ If the command fails, open the **Ollama** app first, then try again.
 **1.2 — Start the AI server and its watchers.**
 
 ```bash
-cd ~/work/ai-server && docker compose --profile monitoring up -d
+cd ~/work/ai-server && cp -n .env.example .env
+# set OTEL_EXPORTER_OTLP_ENDPOINT=http://loki:3100/otlp in .env
+docker compose --profile monitoring up -d
 ```
 
 Wait for it to finish. Then check:
@@ -101,7 +101,7 @@ docker ps --format '{{.Names}}'
 **1.3 — Give the tests a working key.**
 
 ```bash
-docker exec ai-server-redis redis-cli set "api-key:secret123" alice
+docker exec ai-server-redis redis-cli -p 6380 set "api-key:secret123" alice
 ```
 
 **PASS:** you see `OK`.
@@ -282,7 +282,7 @@ Now we prove the watchdog sees **real** traffic, not just test commands.
 **6.1** Take the key away, so the Autotester's key becomes wrong:
 
 ```bash
-docker exec ai-server-redis redis-cli del "api-key:secret123"
+docker exec ai-server-redis redis-cli -p 6380 del "api-key:secret123"
 ```
 
 **6.2** In MarkUs, click **Run Tests** again and wait for the result.
@@ -307,7 +307,7 @@ Open the line: it has a `client_ip`. It must **not** show any key text.
 **6.4** Give the key back:
 
 ```bash
-docker exec ai-server-redis redis-cli set "api-key:secret123" alice
+docker exec ai-server-redis redis-cli -p 6380 set "api-key:secret123" alice
 ```
 
 ---
@@ -376,7 +376,7 @@ If all five boxes are checked, everything we built works.
 | Test result says timeout | The AI was too slow. Raise Timeout to `600` and run again. |
 | Feedback appears but no `TA_OK:` | Run the test once more. If it is still missing, the instructions fix is broken. Report it. |
 | Test result shows error 500 | The wrong-key fix is broken. Report it. |
-| Log book empty in Grafana | Logs are not flowing. The collector or Loki may be off. Redo step 1.2. |
+| Log book empty in Grafana | Logs are not flowing. Loki may be off, or `OTEL_EXPORTER_OTLP_ENDPOINT` is unset in `.env`. Redo step 1.2. |
 | No alarm email after 2 minutes | Check the alert rules page first. If the rule fires but no email comes, Grafana cannot reach Mailpit. |
 
 When you report a problem, copy the exact words you saw. That helps a lot.
