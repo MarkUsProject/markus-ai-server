@@ -95,13 +95,15 @@ def chat_with_llama_server_http(
         )
 
         done_log_data = {'model': model, 'response_status_code': response.status_code}
-        logger.info(f'chat_with_llama_server_http done: {done_log_data}')
-        if response.status_code != 200:
-            raise Exception(f"Llama-server HTTP error {response.status_code}")
-        data = response.json()
-        if 'choices' not in data or not data['choices']:
-            raise Exception("Invalid response format from llama-server")
-        return data['choices'][0]['message']['content']
+        logger.info(f'chat_with_llama_server_http done: {start_log_data}')
+        if response.status_code == 200:
+            data = response.json()
+            if 'choices' in data and len(data['choices']) > 0:
+                return data['choices'][0]['message']['content']
+            else:
+                raise Exception("Invalid response format from llama-server")
+        else:
+            raise Exception(f"Llama-server HTTP error")
 
     except requests.Timeout:
         raise Exception(f"Llama-server request timed out for model {model}")
@@ -281,8 +283,6 @@ def chat():
     system_prompt = request.form.get('system_prompt') or request.form.get('system_instructions')
     image_files = list(request.files.values())
     model_options = request.form.get('model_options')
-    if model_options:
-        model_options = json.loads(model_options)
     json_schema = request.form.get('json_schema')
     if json_schema:
         json_schema = json.loads(json_schema)
