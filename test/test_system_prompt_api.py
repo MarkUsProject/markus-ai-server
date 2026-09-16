@@ -76,6 +76,24 @@ class TestSystemPromptAPI:
         )
 
     @patch('markus_ai_server.server.REDIS_CONNECTION')
+    @patch('markus_ai_server.server.chat_with_model')
+    def test_model_options_parsed_as_json(self, mock_chat, mock_redis, client):
+        """model_options arrives as a JSON form string and must reach the model as a dict."""
+        mock_redis.get.return_value = b'test_user'
+        mock_chat.return_value = MOCK_MODEL_ANSWER
+
+        response = client.post(
+            '/chat',
+            headers={'X-API-KEY': 'test-key'},
+            data={'model': TEST_MODEL, 'content': TEST_USER_CONTENT, 'model_options': '{"temperature": 0}'},
+        )
+
+        assert response.status_code == 200
+        mock_chat.assert_called_once_with(
+            TEST_MODEL, TEST_USER_CONTENT, 'cli', None, [], json_schema=None, model_options={'temperature': 0}
+        )
+
+    @patch('markus_ai_server.server.REDIS_CONNECTION')
     def test_api_authentication_still_required(self, mock_redis, client):
         """Test that authentication is still required with system_prompt."""
         mock_redis.get.return_value = None
