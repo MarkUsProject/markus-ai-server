@@ -232,12 +232,17 @@ real alert emails land in Mailpit.
 bash test/e2e/suite.sh
 ```
 
-> **Verified:** the suite passed every check (`PASSED: 12 FAILED: 0`). Both rules
-> fired and emailed Mailpit. The below-threshold IP did not fire. No secret
-> reached Loki.
+> **Verified 2026-09-16:** `PASSED: 15 FAILED: 0`. Both rules fired and emailed
+> Mailpit. The below-threshold IP stayed quiet. No secret reached Loki. Run twice
+> back to back, green both times.
 
-It runs eight scenarios (12 checks in total), prints a pass/fail count, and exits
+It runs nine scenarios (15 checks in total), prints a pass/fail count, and exits
 non-zero on any failure.
+
+The suite is re-runnable. `policies.yml` sets `repeat_interval: 1h`, so a rule left
+firing by an earlier run would send no fresh email and T5/T6 would report false
+failures. T0 waits for every rule to return to inactive first, which takes about
+5 to 6 minutes after the last failed key. On a cold stack it passes at once.
 
 | # | Check |
 |---|---|
