@@ -137,30 +137,32 @@ class TestClientIpResolution:
     """ProxyFix must give the real client IP only when behind a trusted proxy."""
 
     @staticmethod
-    def _ip_app(trusted_proxy_hops):
+    def _resolved_ip(trusted_proxy_hops, forwarded_for, remote_addr):
+        """Return ``request.remote_addr`` as a handler sees it, after proxy handling.
+
+        The address is captured inside the handler instead of returned in the body.
+        Echoing a caller-supplied address back into a response is the reflected-XSS
+        shape, and the assertion here is about the resolved value, not the response.
+        """
         test_app = Flask(__name__)
         telemetry.apply_proxy_fix(test_app, trusted_proxy_hops)
+        seen = []
 
         @test_app.route('/ip')
         def ip():
-            return request.remote_addr or ''
+            seen.append(request.remote_addr)
+            return '', 204
 
-        return test_app.test_client()
+        test_app.test_client().get(
+            '/ip',
+            headers={'X-Forwarded-For': forwarded_for},
+            environ_overrides={'REMOTE_ADDR': remote_addr},
+        )
+        return seen[0]
 
     def test_behind_proxy_uses_forwarded_for(self):
-        client = self._ip_app(trusted_proxy_hops=1)
-        resp = client.get(
-            '/ip',
-            headers={'X-Forwarded-For': '9.9.9.9'},
-            environ_overrides={'REMOTE_ADDR': '10.0.0.1'},
-        )
-        assert resp.get_data(as_text=True) == '9.9.9.9'
+        assert self._resolved_ip(1, '9.9.9.9', '10.0.0.1') == '9.9.9.9'
 
     def test_direct_access_ignores_spoofed_forwarded_for(self):
-        client = self._ip_app(trusted_proxy_hops=0)  # ProxyFix not applied
-        resp = client.get(
-            '/ip',
-            headers={'X-Forwarded-For': '9.9.9.9'},  # attacker-supplied
-            environ_overrides={'REMOTE_ADDR': '10.0.0.1'},
-        )
-        assert resp.get_data(as_text=True) == '10.0.0.1'
+        # ProxyFix is not applied, so the attacker-supplied header must be ignored.
+        assert self._resolved_ip(0, '9.9.9.9', '10.0.0.1') == '10.0.0.1'
