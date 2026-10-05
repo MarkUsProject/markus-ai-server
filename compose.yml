@@ -15,6 +15,14 @@ services:
       - LLAMA_SERVER_URL=http://host.docker.internal:11434
       - OLLAMA_HOST=http://127.0.0.1:11434
       - DEFAULT_MODEL=smollm2:135m-instruct-q2_K
+      # Audit events go straight to Loki's native OTLP endpoint. Empty by default:
+      # telemetry.py gates setup on this variable, so a plain `docker compose up`
+      # (no monitoring profile, no Loki) skips export instead of retrying a dead
+      # host. Set it in .env to run the monitoring profile.
+      - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      # Mirrors the production reverse proxy: trust 1 X-Forwarded-For hop so the
+      # real client IP is recorded (and so the E2E suite can inject attacker IPs).
+      - TRUSTED_PROXY_HOPS=1
 
     # Run as root during development so the environment is mutable.
     user: root
@@ -45,6 +53,81 @@ services:
       retries: 5
     restart: unless-stopped
 
+  # ==================== Monitoring (intrusion detection) ====================
+  # Started with: docker compose --profile monitoring up -d
+  # Requires OTEL_EXPORTER_OTLP_ENDPOINT in .env, or the app exports nothing.
+
+  # Loki - log store for audit events. Ingests OTLP from the app directly.
+  loki:
+    image: grafana/loki:3.3.2
+    container_name: loki
+    profiles: ["monitoring"]
+    command: ["-config.file=/etc/loki/loki.yml"]
+    volumes:
+      - ./monitoring/loki.yml:/etc/loki/loki.yml:ro
+      - loki_data:/loki
+    ports:
+      - "${LOKI_PORT:-3100}:3100"
+    restart: unless-stopped
+
+  # Grafana - runs the intrusion-detection rules over Loki and sends the email.
+  # Default host port 3001 avoids clashing with the MarkUs rails app on 3000.
+  grafana:
+    image: grafana/grafana:11.4.0
+    container_name: grafana
+    profiles: ["monitoring"]
+    ports:
+      - "${GRAFANA_PORT:-3001}:3000"
+    environment:
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
+      # SMTP points at Mailpit for testing; override for the production relay.
+      - GF_SMTP_ENABLED=true
+      - GF_SMTP_HOST=mailpit:1025
+      - GF_SMTP_FROM_ADDRESS=ai-server-alerts@markus.local
+      - GF_SMTP_FROM_NAME=MarkUs AI Server Alerts
+      - GF_SMTP_SKIP_VERIFY=true
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      - loki
+    restart: unless-stopped
+
+  # Mailpit - captures alert emails during testing (SMTP sink + web UI/API)
+  mailpit:
+    image: axllent/mailpit:latest
+    container_name: mailpit
+    profiles: ["monitoring"]
+    ports:
+      - "${MAILPIT_UI_PORT:-8025}:8025"   # web UI + REST API (assert emails here)
+      - "${MAILPIT_SMTP_PORT:-1025}:1025"  # SMTP
+    restart: unless-stopped
+
 volumes:
   redis_data:
   ollama_data:
+  loki_data:
+  grafana_data:
+
+# ==================== USAGE ====================
+#
+# Core services only (Redis, AI Server):
+#   docker compose up -d
+#
+# Everything including intrusion-detection monitoring:
+#   docker compose --profile monitoring up -d
+#
+# Stop:
+#   docker compose down                        # keep data
+#   docker compose --profile monitoring down -v  # also drop Loki/Grafana/Redis data
+#
+# ==================== ACCESS URLS ====================
+#
+#   - AI Server:  http://localhost:5001
+#   - Redis:      localhost:6380
+#
+# Monitoring profile only:
+#   - Loki:       http://localhost:3100
+#   - Grafana:    http://localhost:3001
+#   - Mailpit UI: http://localhost:8025

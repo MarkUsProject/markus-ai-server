@@ -175,3 +175,12 @@ cython_debug/
 
 # Ignore JetBrains IDE configuration folder
 .idea/
+
+# macOS
+.DS_Store
+
+# Claude Code local config and session data
+.claude/
+
+# Internal development context (domain glossary, not shipped)
+CONTEXT.md

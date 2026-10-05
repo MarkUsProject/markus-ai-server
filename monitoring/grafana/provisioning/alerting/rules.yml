@@ -1,0 +1,117 @@
+# Intrusion-detection alert rules over ai-server audit logs.
+# Audit events arrive via OTLP, so their fields (event, client_ip) are Loki
+# structured metadata: filter them directly, no `| json` parser.
+# Each rule: LogQL query (instant) -> Reduce (last) -> Threshold.
+apiVersion: 1
+
+groups:
+  - orgId: 1
+    name: ai-server-intrusion-detection
+    folder: AI Server
+    interval: 1m
+    rules:
+      # Rule 1 - brute force: one IP with more than 10 auth failures in 5 minutes.
+      - uid: auth-bruteforce-per-ip
+        title: Auth brute force from a single IP
+        condition: threshold
+        for: 0m
+        noDataState: OK
+        execErrState: Error
+        labels:
+          service: ai-server
+          severity: warning
+        annotations:
+          summary: 'More than 10 failed API-key attempts from {{ $labels.client_ip }} in 5 minutes'
+          description: 'Possible brute force against the ai-server API key from {{ $labels.client_ip }}.'
+        data:
+          - refId: query
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: loki
+            model:
+              datasource:
+                type: loki
+                uid: loki
+              editorMode: code
+              expr: 'sum by (client_ip) (count_over_time({service_name="ai-server"} | event="auth_failure" [5m]))'
+              queryType: instant
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: query
+          - refId: reduce
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              datasource:
+                type: __expr__
+                uid: __expr__
+              expression: query
+              reducer: last
+              refId: reduce
+          - refId: threshold
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              datasource:
+                type: __expr__
+                uid: __expr__
+              expression: reduce
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [10]
+              refId: threshold
+
+      # Rule 2 - spray/flood: more than 50 auth failures across all IPs in 5 minutes.
+      - uid: auth-spray-global
+        title: Auth failure spray across many IPs
+        condition: threshold
+        for: 0m
+        noDataState: OK
+        execErrState: Error
+        labels:
+          service: ai-server
+          severity: critical
+        annotations:
+          summary: 'More than 50 failed API-key attempts across all IPs in 5 minutes'
+          description: 'Possible distributed/spray attack against the ai-server API key.'
+        data:
+          - refId: query
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: loki
+            model:
+              datasource:
+                type: loki
+                uid: loki
+              editorMode: code
+              expr: 'sum (count_over_time({service_name="ai-server"} | event="auth_failure" [5m]))'
+              queryType: instant
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: query
+          - refId: reduce
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              datasource:
+                type: __expr__
+                uid: __expr__
+              expression: query
+              reducer: last
+              refId: reduce
+          - refId: threshold
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              datasource:
+                type: __expr__
+                uid: __expr__
+              expression: reduce
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [50]
+              refId: threshold

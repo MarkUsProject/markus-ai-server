@@ -42,3 +42,6 @@ compose.yml
 
 # Pre-commit
 .pre-commit-config.yaml
+
+# Monitoring configs (mounted at runtime, not needed in the image)
+monitoring/

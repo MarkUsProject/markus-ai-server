@@ -16,6 +16,7 @@ from flask import Flask, abort, jsonify, request
 from werkzeug.exceptions import HTTPException
 
 from .redis_helper import REDIS_CONNECTION
+from .telemetry import configure_audit_logging, log_auth_failure
 
 # Configure logger
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(name)s - %(message)s')
@@ -25,6 +26,10 @@ logger = logging.getLogger('ai-server')
 load_dotenv()
 
 app = Flask('AI server')
+
+# Audit logging / intrusion detection. TRUSTED_PROXY_HOPS must be 0 when the
+# app is reached directly, or X-Forwarded-For becomes a spoofing hole.
+configure_audit_logging(app)
 
 # Configuration from environment variables
 DEFAULT_MODEL = os.getenv('DEFAULT_MODEL', 'deepseek-coder-v2:latest')
@@ -255,12 +260,12 @@ def authenticate() -> bytes:
     client_ip = request.remote_addr
     endpoint = request.path
     if not api_key:
-        logger.warning(f"Missing API key from {client_ip} at {endpoint}")
+        log_auth_failure('missing_key', client_ip, endpoint)
         abort(401, description="Missing API key")
 
     user = REDIS_CONNECTION.get(f"api-key:{api_key}")
     if not user:
-        logger.warning(f"Invalid API key attempt from {client_ip} at {endpoint}")
+        log_auth_failure('invalid_key', client_ip, endpoint)
         abort(401, description="Invalid API key")
 
     return user
